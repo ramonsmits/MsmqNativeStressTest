@@ -17,8 +17,16 @@ namespace MsmqNativeStresstest
 
         static void Main()
         {
+            // 3600 No transaction
+            // 2800 Msmq transaction
+            // 2000 Transaction scope / DTC
+
             Console.WriteLine("64bit: {0}", Environment.Is64BitProcess);
-            var reader = new MessageProcessor(@".\private$\msmqnative", 4, false);
+            var reader = new MessageProcessor(@".\private$\msmqnative", 4,
+                MessageProcessor.MessageProcessorKind.TransactionScope
+                //MessageProcessor.MessageProcessorKind.MsmqTransaction
+                //MessageProcessor.MessageProcessorKind.NoTransaction
+                );
 
             reader.Open();
             var p = new Program();
@@ -42,7 +50,7 @@ namespace MsmqNativeStresstest
                 batchCountdownEvent.Reset();
                 var sp = Stopwatch.StartNew();
 
-                Parallel.For(0, batchSize, i =>
+                Parallel.For(0, batchSize, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount * 2 }, i =>
                 {
                     var current = Interlocked.Increment(ref total);
                     var msg = new Message

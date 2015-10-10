@@ -1,28 +1,28 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Messaging;
-using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 using System.Transactions;
 
 namespace MsmqNativeStresstest
 {
-    public class MessageProcessor//<TMessage>
+    public class MessageProcessor
     {
-        private readonly bool Ambient;
+        public enum MessageProcessorKind
+        {
+            TransactionScope,
+            MsmqTransaction,
+            NoTransaction
+        }
+
+        private readonly MessageProcessorKind Kind;
         private long counter;
         private readonly MessageQueue[] Receivers;
         private bool IsClosing;
-        //private PeekCompletedEventHandler x;
-        public MessageProcessor(string path)
-            : this(path, 1, false) { }
-        public MessageProcessor(string path, int count, bool ambient)
-            : base()
+        public MessageProcessor(string path, int count, MessageProcessorKind kind)
         {
-            Ambient = ambient;
+            Kind = kind;
 
             if (string.IsNullOrEmpty(path))
                 throw new ArgumentNullException("path");
@@ -48,10 +48,18 @@ namespace MsmqNativeStresstest
             this.OnClosing();
             foreach (var queue in Receivers)
             {
-                if (Ambient)
-                    queue.PeekCompleted -= queue_PeekCompletedAmbient;
-                else
-                    queue.PeekCompleted -= queue_PeekCompleted;
+                switch (Kind)
+                {
+                    case MessageProcessorKind.TransactionScope:
+                        queue.PeekCompleted -= queue_PeekCompletedAmbient;
+                        break;
+                    case MessageProcessorKind.MsmqTransaction:
+                        queue.PeekCompleted -= queue_PeekCompleted;
+                        break;
+                    case MessageProcessorKind.NoTransaction:
+                        queue.PeekCompleted -= queue_NoTransaction;
+                        break;
+                }
 
                 queue.Close();
             }
@@ -76,11 +84,18 @@ namespace MsmqNativeStresstest
             this.OnOpening();
             foreach (var queue in this.Receivers)
             {
-                if (Ambient)
-                    queue.PeekCompleted += queue_PeekCompletedAmbient;
-                else
-                    queue.PeekCompleted += queue_PeekCompleted;
-
+                switch (Kind)
+                {
+                    case MessageProcessorKind.TransactionScope:
+                        queue.PeekCompleted += queue_PeekCompletedAmbient;
+                        break;
+                    case MessageProcessorKind.MsmqTransaction:
+                        queue.PeekCompleted += queue_PeekCompleted;
+                        break;
+                    case MessageProcessorKind.NoTransaction:
+                        queue.PeekCompleted += queue_NoTransaction;
+                        break;
+                }
                 queue.BeginPeek();
             }
             this.IsOpen = true;
@@ -126,6 +141,7 @@ namespace MsmqNativeStresstest
                     queue.BeginPeek();
             }
         }
+
         private void queue_PeekCompletedAmbient(object sender, PeekCompletedEventArgs e)
         {
             var queue = (MessageQueue)sender;
@@ -150,6 +166,29 @@ namespace MsmqNativeStresstest
                     if (!this.IsClosing)
                         queue.BeginPeek();
                 }
+            }
+        }
+
+        private void queue_NoTransaction(object sender, PeekCompletedEventArgs e)
+        {
+            var queue = (MessageQueue)sender;
+            try
+            {
+                // if the queue closes after the transaction begins,
+                // but before the call to Receive, then an exception
+                // will be thrown and the transaction will be aborted
+                // leaving the message to be processed next time
+                var msg = queue.Receive(MessageQueueTransactionType.Automatic);
+                Handle(msg);
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine(ex.Message);
+            }
+            finally
+            {
+                if (!this.IsClosing)
+                    queue.BeginPeek();
             }
         }
     }
